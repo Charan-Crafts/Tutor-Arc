@@ -22,7 +22,7 @@ const Teacher = () => {
             const roomUrl = `${window.location.origin}/room/${newRoomId}`;
 
             // Save session to database
-            const response = await axios.post('/api/live-sessions', {
+            const response = await axios.post('https://tutor-arc.onrender.com/api/live-sessions', {
                 userurl: roomUrl
             });
 
