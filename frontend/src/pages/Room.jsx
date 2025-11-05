@@ -27,6 +27,39 @@ const Room = () => {
   const peersRef = useRef({});
   const userVideoRefs = useRef({});
 
+  // Retry getUserMedia on user gesture (production/mobile may require it)
+  const retryLocalMedia = async () => {
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+      setError('Your browser does not support video streaming.');
+      return;
+    }
+    const attempts = [
+      { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } },
+      { video: true, audio: true },
+      { video: { facingMode: 'user' }, audio: true }
+    ];
+    for (let i = 0; i < attempts.length; i++) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(attempts[i]);
+        stream.getTracks().forEach(t => (t.enabled = true));
+        setMyStream(stream);
+        if (myVideoRef.current) {
+          const el = myVideoRef.current;
+          el.srcObject = stream;
+          el.muted = true;
+          el.playsInline = true;
+          await el.play().catch(() => { });
+          setNeedsPreviewTap(false);
+        }
+        return;
+      } catch (e) {
+        if (i === attempts.length - 1) {
+          setError('Could not access camera/microphone. Please allow permissions.');
+        }
+      }
+    }
+  };
+
   const createPeerConnection = (socketId) => {
     const peer = new RTCPeerConnection({
       iceServers: [
@@ -641,6 +674,16 @@ const Room = () => {
             <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded text-sm">
               You {isTeacher ? '(Teacher)' : '(Student)'}
             </div>
+            {!myStream && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
+                <button
+                  onClick={retryLocalMedia}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg"
+                >
+                  Enable Camera
+                </button>
+              </div>
+            )}
             {needsPreviewTap && (
               <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
                 <button
