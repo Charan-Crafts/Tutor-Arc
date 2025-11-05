@@ -27,6 +27,10 @@ const Teacher = () => {
             });
 
             if (response.data.success) {
+                // Store user type
+                localStorage.setItem('userType', 'teacher');
+                localStorage.setItem('teacherEmail', response.data.data?.email || 'teacher@tutorarc.com');
+
                 // Emit event to create/join room as teacher
                 socket.emit('create-room', { roomId: newRoomId, userType: 'teacher' });
 

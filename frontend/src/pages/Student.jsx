@@ -22,6 +22,9 @@ const Student = () => {
             roomId = classLink.split('/room/')[1]?.split('?')[0] || roomId;
         }
 
+        // Store user type
+        localStorage.setItem('userType', 'student');
+
         // Emit event to join room as student
         socket.emit('join-room', {
             email: localStorage.getItem('studentEmail') || 'student@example.com',
@@ -98,7 +101,7 @@ const Student = () => {
                     </div>
                 </div>
 
-                
+
             </div>
         </div>
     );

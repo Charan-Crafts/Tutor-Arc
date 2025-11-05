@@ -52,22 +52,54 @@ app.use(notFound);
 app.use(errorHandler);
 
 const emailToSocketMapping = new Map();
+const socketToRoomMapping = new Map();
 
 io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
+
     // to join the room we required the email and roomId from the frontend
     socket.on("join-room", (data) => {
-        const { email, roomId } = data;
+        const { email, roomId, userType } = data;
 
         console.log("User is joined in the room with email ", email, " and room id ", roomId);
 
         emailToSocketMapping.set(email, socket.id);
+        socketToRoomMapping.set(socket.id, roomId);
+
+        // Store user type in socket data
+        socket.data = { email, roomId, userType };
 
         socket.join(roomId);
 
-        socket.emit("joined-room", { roomId });
+        // Get all existing users in the room
+        const room = io.sockets.adapter.rooms.get(roomId);
+        const existingUsers = [];
 
-        // Hey user is joined with this email
-        socket.broadcast.to(roomId).emit("User-joined", { email });
+        if (room) {
+            room.forEach((socketId) => {
+                if (socketId !== socket.id) {
+                    const existingSocket = io.sockets.sockets.get(socketId);
+                    if (existingSocket && existingSocket.data) {
+                        existingUsers.push({
+                            email: existingSocket.data.email,
+                            socketId: socketId
+                        });
+                    }
+                }
+            });
+        }
+
+        // Send existing users to the new joiner
+        socket.emit("joined-room", {
+            roomId,
+            existingUsers
+        });
+
+        // Notify others in the room that a user joined (with socketId for WebRTC)
+        socket.broadcast.to(roomId).emit("user-joined", {
+            email,
+            socketId: socket.id
+        });
     });
 
     // Handle create-room event
@@ -77,6 +109,47 @@ io.on('connection', (socket) => {
 
         socket.join(roomId);
         socket.emit("room-created", { roomId });
+    });
+
+    // Handle WebRTC signaling
+    socket.on("send-signal", (data) => {
+        const { signal, to, from, roomId } = data;
+        console.log(`Signal from ${from} to ${to} in room ${roomId}`);
+
+        // Send signal to specific user
+        io.to(to).emit("receive-signal", {
+            signal,
+            from: socket.id
+        });
+    });
+
+    // Handle peer connection confirmation
+    socket.on("peer-connected", (data) => {
+        const { socketId } = data;
+        io.to(socketId).emit("peer-connected", { socketId: socket.id });
+    });
+
+    // Handle disconnection
+    socket.on("disconnect", () => {
+        console.log('User disconnected:', socket.id);
+
+        const roomId = socketToRoomMapping.get(socket.id);
+        const userData = socket.data;
+
+        if (roomId) {
+            // Notify others in the room that user left
+            socket.broadcast.to(roomId).emit("user-left", {
+                socketId: socket.id,
+                email: userData?.email
+            });
+
+            socketToRoomMapping.delete(socket.id);
+        }
+
+        // Clean up email mapping
+        if (userData?.email) {
+            emailToSocketMapping.delete(userData.email);
+        }
     });
 });
 
