@@ -330,10 +330,35 @@ const Room = () => {
           { video: { facingMode: 'user' }, audio: true }
         ];
 
+        const requestWithConstraints = async (constraints) => {
+          console.log('Requesting media with constraints:', constraints);
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          // If no video track, try to pick a concrete device
+          const hasVideo = stream.getVideoTracks && stream.getVideoTracks().length > 0;
+          if (!hasVideo) {
+            try {
+              const devices = await navigator.mediaDevices.enumerateDevices();
+              const cameras = devices.filter(d => d.kind === 'videoinput');
+              if (cameras.length > 0) {
+                stream.getTracks().forEach(t => t.stop());
+                const deviceId = cameras[0].deviceId;
+                console.log('Retrying with concrete camera deviceId:', deviceId);
+                const retryStream = await navigator.mediaDevices.getUserMedia({
+                  video: { deviceId: { exact: deviceId } },
+                  audio: true
+                });
+                return retryStream;
+              }
+            } catch (e) {
+              console.warn('enumerateDevices/retry failed:', e);
+            }
+          }
+          return stream;
+        };
+
         for (let i = 0; i < attempts.length; i++) {
           try {
-            console.log('Requesting media with constraints:', attempts[i]);
-            const stream = await navigator.mediaDevices.getUserMedia(attempts[i]);
+            const stream = await requestWithConstraints(attempts[i]);
             console.log('Got local stream with tracks:', stream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled })));
 
             // Ensure all tracks are enabled
