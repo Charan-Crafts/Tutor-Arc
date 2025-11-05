@@ -6,6 +6,8 @@ const liveSessionRoutes = require("./routes/liveSessionRoutes");
 const errorHandler = require("./middleware/errorHandler");
 const notFound = require("./middleware/notFound");
 
+const cors = require("cors");
+
 // Connect to MongoDB
 connectDB();
 
@@ -18,6 +20,15 @@ const io = new Server(
 
 // Web server
 const app = express();
+
+app.use(cors(
+    {
+        origin: "https://tutor-arc-three.vercel.app/",
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+        credentials: true
+    }
+));
 
 // CORS middleware
 app.use((req, res, next) => {
