@@ -12,23 +12,31 @@ const cors = require("cors");
 connectDB();
 
 // Socket server
-const io = new Server(
-    {
-        cors: true
+const io = new Server({
+    cors: {
+        origin: [
+            "https://tutor-arc-three.vercel.app",
+            "http://localhost:3000",
+            "http://localhost:5173"
+        ],
+        methods: ["GET", "POST", "PUT", "DELETE"],
+        credentials: true
     }
-);
+});
 
 // Web server
 const app = express();
 
-app.use(cors(
-    {
-        origin: "https://tutor-arc-three.vercel.app/",
-        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
-        credentials: true
-    }
-));
+app.use(cors({
+    origin: [
+        "https://tutor-arc-three.vercel.app",  // NO TRAILING SLASH
+        "http://localhost:3000",
+        "http://localhost:5173"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+    credentials: true
+}));
 
 // CORS middleware
 app.use((req, res, next) => {
