@@ -276,50 +276,67 @@ const Room = () => {
     const userType = localStorage.getItem('userType') || 'student';
     setIsTeacher(userType === 'teacher');
 
-    // Request media stream with audio constraints
+    // Request media stream with robust fallbacks for production
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 44100
+      const tryGetUserMedia = async () => {
+        // Secure context check (required by browsers for camera/mic)
+        if (window.isSecureContext === false && window.location.protocol !== 'https:') {
+          setError('Camera requires HTTPS. Please use a secure URL.');
         }
-      })
-        .then((stream) => {
-          console.log('Got local stream with tracks:', stream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled })));
 
-          // Ensure all tracks are enabled
-          stream.getTracks().forEach(track => {
-            track.enabled = true;
-            console.log(`Local ${track.kind} track enabled:`, track.enabled);
-          });
+        const attempts = [
+          // Preferred HD with audio processing
+          {
+            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          },
+          // Generic fallback
+          { video: true, audio: true },
+          // Mobile-friendly front camera fallback
+          { video: { facingMode: 'user' }, audio: true }
+        ];
 
-          setMyStream(stream);
-          if (myVideoRef.current) {
-            myVideoRef.current.srcObject = stream;
-            // Local video should be muted to prevent echo
-            myVideoRef.current.muted = true;
+        for (let i = 0; i < attempts.length; i++) {
+          try {
+            console.log('Requesting media with constraints:', attempts[i]);
+            const stream = await navigator.mediaDevices.getUserMedia(attempts[i]);
+            console.log('Got local stream with tracks:', stream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled })));
+
+            // Ensure all tracks are enabled
+            stream.getTracks().forEach(track => {
+              track.enabled = true;
+              console.log(`Local ${track.kind} track enabled:`, track.enabled);
+            });
+
+            setMyStream(stream);
+            if (myVideoRef.current) {
+              myVideoRef.current.srcObject = stream;
+              // Local video should be muted to prevent echo
+              myVideoRef.current.muted = true;
+              myVideoRef.current.playsInline = true;
+              // Attempt autoplay
+              myVideoRef.current.play().catch(() => { });
+            }
+
+            // Join room
+            const email = localStorage.getItem('studentEmail') || localStorage.getItem('teacherEmail') || 'user@example.com';
+            socket.emit('join-room', { email, roomId, userType });
+            setLoading(false);
+            return; // success
+          } catch (err) {
+            console.warn(`getUserMedia attempt ${i + 1} failed:`, err);
+            if (i === attempts.length - 1) {
+              // Exhausted attempts
+              setError('Could not access camera/microphone. Please allow permissions and ensure your device has a camera.');
+              setLoading(false);
+              const email = localStorage.getItem('studentEmail') || localStorage.getItem('teacherEmail') || 'user@example.com';
+              socket.emit('join-room', { email, roomId, userType });
+            }
           }
+        }
+      };
 
-          // Join room
-          const email = localStorage.getItem('studentEmail') || localStorage.getItem('teacherEmail') || 'user@example.com';
-          socket.emit('join-room', { email, roomId, userType });
-          setLoading(false);
-        })
-        .catch((err) => {
-          console.error('Error accessing media devices:', err);
-          setError('Could not access camera/microphone. Please allow permissions.');
-          setLoading(false);
-
-          // Still join room even without media
-          const email = localStorage.getItem('studentEmail') || localStorage.getItem('teacherEmail') || 'user@example.com';
-          socket.emit('join-room', { email, roomId, userType });
-        });
+      tryGetUserMedia();
     } else {
       setError('Your browser does not support video streaming.');
       setLoading(false);
