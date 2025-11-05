@@ -34,11 +34,19 @@ const Room = () => {
     // Handle remote stream
     peer.ontrack = (event) => {
       const [remoteStream] = event.streams;
-      console.log('Received remote stream from', socketId, 'with tracks:', remoteStream.getTracks().map(t => t.kind));
+      const audioTracks = remoteStream.getAudioTracks();
+      const videoTracks = remoteStream.getVideoTracks();
+
+      console.log('Received remote stream from', socketId, {
+        audioTracks: audioTracks.length,
+        videoTracks: videoTracks.length,
+        trackDetails: remoteStream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, readyState: t.readyState }))
+      });
 
       // Ensure audio and video tracks are enabled
       remoteStream.getTracks().forEach(track => {
         track.enabled = true;
+        console.log(`Track ${track.kind} enabled:`, track.enabled, 'readyState:', track.readyState);
       });
 
       setRemoteStreams(prev => {
@@ -56,13 +64,26 @@ const Room = () => {
         }
       });
 
-      // Update video element if it exists
-      const videoElement = userVideoRefs.current[socketId];
-      if (videoElement && remoteStream) {
-        videoElement.srcObject = remoteStream;
-        videoElement.muted = false;
-        videoElement.volume = 1.0;
-      }
+      // Update video element immediately
+      setTimeout(() => {
+        const videoElement = userVideoRefs.current[socketId];
+        if (videoElement && remoteStream) {
+          videoElement.srcObject = remoteStream;
+          videoElement.muted = false;
+          videoElement.volume = 1.0;
+
+          // Ensure audio plays
+          videoElement.play().catch(err => {
+            console.error('Error playing remote video:', err);
+          });
+
+          console.log('Video element updated for', socketId, {
+            muted: videoElement.muted,
+            volume: videoElement.volume,
+            paused: videoElement.paused
+          });
+        }
+      }, 100);
     };
 
     // Handle ICE candidates
@@ -252,13 +273,34 @@ const Room = () => {
     const userType = localStorage.getItem('userType') || 'student';
     setIsTeacher(userType === 'teacher');
 
-    // Request media stream
+    // Request media stream with audio constraints
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 44100
+        }
+      })
         .then((stream) => {
+          console.log('Got local stream with tracks:', stream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled })));
+
+          // Ensure all tracks are enabled
+          stream.getTracks().forEach(track => {
+            track.enabled = true;
+            console.log(`Local ${track.kind} track enabled:`, track.enabled);
+          });
+
           setMyStream(stream);
           if (myVideoRef.current) {
             myVideoRef.current.srcObject = stream;
+            // Local video should be muted to prevent echo
+            myVideoRef.current.muted = true;
           }
 
           // Join room
@@ -311,6 +353,32 @@ const Room = () => {
     };
   }, [roomId, socket]);
 
+  // Effect to ensure remote video elements have audio enabled
+  useEffect(() => {
+    remoteStreams.forEach(({ socketId, stream }) => {
+      const videoElement = userVideoRefs.current[socketId];
+      if (videoElement && stream) {
+        // Ensure audio is enabled
+        videoElement.muted = false;
+        videoElement.volume = 1.0;
+
+        // Check audio tracks
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length > 0) {
+          audioTracks.forEach(track => {
+            track.enabled = true;
+            console.log(`Ensuring audio track enabled for ${socketId}:`, track.enabled);
+          });
+        }
+
+        // Force play
+        videoElement.play().catch(err => {
+          console.error('Error playing audio for', socketId, err);
+        });
+      }
+    });
+  }, [remoteStreams]);
+
   const toggleVideo = () => {
     if (myStream) {
       const videoTrack = myStream.getVideoTracks()[0];
@@ -322,11 +390,21 @@ const Room = () => {
   };
 
   const toggleAudio = () => {
-    if (myStream) {
-      const audioTrack = myStream.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !isAudioEnabled;
-        setIsAudioEnabled(!isAudioEnabled);
+    const stream = myVideoRef.current?.srcObject || myStream;
+    if (stream && stream.getAudioTracks) {
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        const newState = !isAudioEnabled;
+        audioTracks.forEach(track => {
+          track.enabled = newState;
+          console.log(`Audio track ${track.id} enabled:`, newState);
+        });
+        setIsAudioEnabled(newState);
+
+        // Update all peer connections to reflect the change
+        Object.values(peersRef.current).forEach(peer => {
+          // The track state change will automatically propagate
+        });
       }
     }
   };
@@ -533,17 +611,48 @@ const Room = () => {
               <div key={socketId} className="relative bg-gray-800 rounded-lg overflow-hidden aspect-video">
                 <video
                   ref={(el) => {
-                    if (el && stream) {
-                      el.srcObject = stream;
-                      // Ensure audio is enabled
-                      el.muted = false;
-                      el.volume = 1.0;
+                    if (el) {
+                      userVideoRefs.current[socketId] = el;
+
+                      if (stream) {
+                        el.srcObject = stream;
+                        // Ensure audio is enabled and playing
+                        el.muted = false;
+                        el.volume = 1.0;
+
+                        // Force play to ensure audio works
+                        el.play().then(() => {
+                          console.log('Remote video playing for', socketId);
+                          // Double-check audio settings
+                          el.muted = false;
+                          el.volume = 1.0;
+                        }).catch(err => {
+                          console.error('Error playing remote video:', err);
+                        });
+
+                        // Listen for track events
+                        stream.getTracks().forEach(track => {
+                          track.onended = () => {
+                            console.log('Track ended:', track.kind, socketId);
+                          };
+                          track.onmute = () => {
+                            console.log('Track muted:', track.kind, socketId);
+                            track.enabled = true;
+                          };
+                        });
+                      }
                     }
-                    userVideoRefs.current[socketId] = el;
                   }}
                   autoPlay
                   playsInline
+                  muted={false}
                   className="w-full h-full object-cover"
+                  onLoadedMetadata={(e) => {
+                    // Ensure audio when metadata loads
+                    e.target.muted = false;
+                    e.target.volume = 1.0;
+                    e.target.play().catch(err => console.error('Play error:', err));
+                  }}
                 />
                 <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded text-sm">
                   {participant?.email || 'Participant'}
