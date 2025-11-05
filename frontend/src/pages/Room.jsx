@@ -23,6 +23,7 @@ const Room = () => {
   const [showControls, setShowControls] = useState({}); // {socketId: boolean}
 
   const myVideoRef = useRef(null);
+  const [needsPreviewTap, setNeedsPreviewTap] = useState(false);
   const peersRef = useRef({});
   const userVideoRefs = useRef({});
 
@@ -310,12 +311,21 @@ const Room = () => {
 
             setMyStream(stream);
             if (myVideoRef.current) {
-              myVideoRef.current.srcObject = stream;
+              const el = myVideoRef.current;
+              el.srcObject = stream;
               // Local video should be muted to prevent echo
-              myVideoRef.current.muted = true;
-              myVideoRef.current.playsInline = true;
-              // Attempt autoplay
-              myVideoRef.current.play().catch(() => { });
+              el.muted = true;
+              el.playsInline = true;
+              // Attempt autoplay; show a user-gesture button if it fails
+              el.play().then(() => {
+                setNeedsPreviewTap(false);
+              }).catch(() => {
+                setNeedsPreviewTap(true);
+                setTimeout(() => el.play().catch(() => { }), 300);
+              });
+              el.onloadedmetadata = () => {
+                el.play().then(() => setNeedsPreviewTap(false)).catch(() => setNeedsPreviewTap(true));
+              };
             }
 
             // Join room
@@ -623,10 +633,29 @@ const Room = () => {
               muted
               playsInline
               className="w-full h-full object-cover"
+              onLoadedMetadata={(e) => {
+                const el = e.currentTarget;
+                el.play().catch(() => setNeedsPreviewTap(true));
+              }}
             />
             <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded text-sm">
               You {isTeacher ? '(Teacher)' : '(Student)'}
             </div>
+            {needsPreviewTap && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
+                <button
+                  onClick={() => {
+                    const el = myVideoRef.current;
+                    if (el) {
+                      el.play().then(() => setNeedsPreviewTap(false)).catch(() => setNeedsPreviewTap(true));
+                    }
+                  }}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg"
+                >
+                  Enable Preview
+                </button>
+              </div>
+            )}
             {!isVideoEnabled && (
               <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
                 <VideoOffIcon className="w-16 h-16 text-gray-500" />
