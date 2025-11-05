@@ -1,21 +1,46 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useSocket } from '../Provider/Socket';
+import axios from 'axios';
 
 const Teacher = () => {
     const navigate = useNavigate();
     const { socket } = useSocket();
     const [roomId, setRoomId] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
 
-    const handleStartSession = () => {
-        // Generate a unique room ID or use existing one
-        const newRoomId = roomId || `room-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const handleStartSession = async () => {
+        try {
+            setLoading(true);
+            setError('');
 
-        // Emit event to create/join room as teacher
-        socket.emit('create-room', { roomId: newRoomId, userType: 'teacher' });
+            // Generate a unique room ID or use existing one
+            const newRoomId = roomId || `room-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-        // Navigate to room
-        navigate(`/room/${newRoomId}`);
+            // Generate the room URL
+            const roomUrl = `${window.location.origin}/room/${newRoomId}`;
+
+            // Save session to database
+            const response = await axios.post('/api/live-sessions', {
+                userurl: roomUrl
+            });
+
+            if (response.data.success) {
+                // Emit event to create/join room as teacher
+                socket.emit('create-room', { roomId: newRoomId, userType: 'teacher' });
+
+                // Navigate to room
+                navigate(`/room/${newRoomId}`);
+            } else {
+                setError('Failed to create session. Please try again.');
+            }
+        } catch (error) {
+            console.error('Error creating session:', error);
+            setError(error.response?.data?.message || 'Failed to create session. Please try again.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -54,13 +79,18 @@ const Teacher = () => {
                 {/* Session Card */}
                 <div className="bg-white rounded-lg shadow-xl p-8">
                     <div className="space-y-6">
-                       
+                        {error && (
+                            <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                                <p className="text-sm text-red-800">{error}</p>
+                            </div>
+                        )}
 
                         <button
                             onClick={handleStartSession}
-                            className="w-full py-4 px-6 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all transform hover:scale-105 shadow-lg hover:shadow-xl text-lg"
+                            disabled={loading}
+                            className="w-full py-4 px-6 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all transform hover:scale-105 shadow-lg hover:shadow-xl text-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                         >
-                            Start Session
+                            {loading ? 'Creating Session...' : 'Start Session'}
                         </button>
 
                         <div className="mt-6 p-4 bg-blue-50 rounded-lg">
@@ -71,7 +101,7 @@ const Teacher = () => {
                     </div>
                 </div>
 
-                
+
             </div>
         </div>
     );
