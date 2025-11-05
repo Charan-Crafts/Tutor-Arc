@@ -310,7 +310,7 @@ const Room = () => {
     const userType = localStorage.getItem('userType') || 'student';
     setIsTeacher(userType === 'teacher');
 
-    // Request media stream with robust fallbacks for production
+    // Request media stream with robust fallbacks (dev auto-start, prod require gesture)
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       const tryGetUserMedia = async () => {
         // Secure context check (required by browsers for camera/mic)
@@ -404,7 +404,12 @@ const Room = () => {
         }
       };
 
-      tryGetUserMedia();
+      // Only auto-start camera on localhost for dev convenience; in prod wait for user gesture
+      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        tryGetUserMedia();
+      } else {
+        setNeedsPreviewTap(true);
+      }
     } else {
       setError('Your browser does not support video streaming.');
       setLoading(false);
