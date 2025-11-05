@@ -12,7 +12,7 @@ export const useSocket = () => {
 export const SocketProvider =(props)=>{
 
     const socket = useMemo(()=>io(
-        'http://localhost:8000'
+        'https://tutor-arc.onrender.com'
     ),[])
 
     return (
