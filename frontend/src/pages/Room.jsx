@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../Provider/Socket';
+import { MicIcon, MicOffIcon, VideoIcon, VideoOffIcon, PlayIcon, PauseIcon, FullscreenIcon, VolumeIcon, VolumeOffIcon } from '../components/Icons';
 
 const Room = () => {
   const { roomId } = useParams();
@@ -18,6 +19,8 @@ const Room = () => {
   const [error, setError] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [videoControls, setVideoControls] = useState({}); // {socketId: {volume: 1, muted: false, playing: true}}
+  const [showControls, setShowControls] = useState({}); // {socketId: boolean}
 
   const myVideoRef = useRef(null);
   const peersRef = useRef({});
@@ -358,18 +361,28 @@ const Room = () => {
     remoteStreams.forEach(({ socketId, stream }) => {
       const videoElement = userVideoRefs.current[socketId];
       if (videoElement && stream) {
-        // Ensure audio is enabled
-        videoElement.muted = false;
-        videoElement.volume = 1.0;
-
         // Check audio tracks
         const audioTracks = stream.getAudioTracks();
         if (audioTracks.length > 0) {
           audioTracks.forEach(track => {
             track.enabled = true;
-            console.log(`Ensuring audio track enabled for ${socketId}:`, track.enabled);
           });
         }
+
+        // Initialize controls if not exists
+        setVideoControls(prev => {
+          if (!prev[socketId]) {
+            return {
+              ...prev,
+              [socketId]: {
+                volume: videoElement.volume || 1.0,
+                muted: videoElement.muted || false,
+                playing: !videoElement.paused
+              }
+            };
+          }
+          return prev;
+        });
 
         // Force play
         videoElement.play().catch(err => {
@@ -599,7 +612,7 @@ const Room = () => {
             </div>
             {!isVideoEnabled && (
               <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-                <div className="text-6xl">📹</div>
+                <VideoOffIcon className="w-16 h-16 text-gray-500" />
               </div>
             )}
           </div>
@@ -607,8 +620,19 @@ const Room = () => {
           {/* Remote Videos */}
           {remoteStreams.map(({ socketId, stream }) => {
             const participant = participants.find(p => p.socketId === socketId);
+            const controls = videoControls[socketId] || { volume: 1.0, muted: false, playing: true };
+
             return (
-              <div key={socketId} className="relative bg-gray-800 rounded-lg overflow-hidden aspect-video">
+              <div
+                key={socketId}
+                className="relative bg-gray-800 rounded-lg overflow-hidden aspect-video group cursor-pointer"
+                onMouseEnter={() => setShowControls(prev => ({ ...prev, [socketId]: true }))}
+                onMouseLeave={() => setShowControls(prev => ({ ...prev, [socketId]: false }))}
+                onClick={() => {
+                  // Toggle controls on click
+                  setShowControls(prev => ({ ...prev, [socketId]: !prev[socketId] }));
+                }}
+              >
                 <video
                   ref={(el) => {
                     if (el) {
@@ -617,15 +641,15 @@ const Room = () => {
                       if (stream) {
                         el.srcObject = stream;
                         // Ensure audio is enabled and playing
-                        el.muted = false;
-                        el.volume = 1.0;
+                        el.muted = controls.muted;
+                        el.volume = controls.volume;
 
                         // Force play to ensure audio works
                         el.play().then(() => {
                           console.log('Remote video playing for', socketId);
                           // Double-check audio settings
-                          el.muted = false;
-                          el.volume = 1.0;
+                          el.muted = controls.muted;
+                          el.volume = controls.volume;
                         }).catch(err => {
                           console.error('Error playing remote video:', err);
                         });
@@ -645,15 +669,120 @@ const Room = () => {
                   }}
                   autoPlay
                   playsInline
-                  muted={false}
+                  muted={controls.muted}
+                  volume={controls.volume}
                   className="w-full h-full object-cover"
                   onLoadedMetadata={(e) => {
                     // Ensure audio when metadata loads
-                    e.target.muted = false;
-                    e.target.volume = 1.0;
+                    e.target.muted = controls.muted;
+                    e.target.volume = controls.volume;
                     e.target.play().catch(err => console.error('Play error:', err));
                   }}
                 />
+
+                {/* Video Controls Overlay */}
+                {showControls[socketId] && (
+                  <div className="absolute inset-0 bg-black bg-opacity-40 flex items-center justify-center transition-opacity">
+                    <div className="bg-gray-900 bg-opacity-90 rounded-lg p-4 w-full mx-4" onClick={(e) => e.stopPropagation()}>
+                      {/* Play/Pause Button */}
+                      <div className="flex items-center justify-center space-x-4 mb-3">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const videoEl = userVideoRefs.current[socketId];
+                            if (videoEl) {
+                              if (videoEl.paused) {
+                                videoEl.play();
+                                setVideoControls(prev => ({
+                                  ...prev,
+                                  [socketId]: { ...(prev[socketId] || { volume: 1.0, muted: false, playing: true }), playing: true }
+                                }));
+                              } else {
+                                videoEl.pause();
+                                setVideoControls(prev => ({
+                                  ...prev,
+                                  [socketId]: { ...(prev[socketId] || { volume: 1.0, muted: false, playing: true }), playing: false }
+                                }));
+                              }
+                            }
+                          }}
+                          className="p-2 bg-blue-600 hover:bg-blue-700 rounded-full transition-colors flex items-center justify-center"
+                          title={controls.playing ? 'Pause' : 'Play'}
+                        >
+                          {controls.playing ? <PauseIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5" />}
+                        </button>
+
+                        {/* Mute/Unmute */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const videoEl = userVideoRefs.current[socketId];
+                            if (videoEl) {
+                              const newMuted = !controls.muted;
+                              videoEl.muted = newMuted;
+                              setVideoControls(prev => ({
+                                ...prev,
+                                [socketId]: { ...(prev[socketId] || { volume: 1.0, muted: false, playing: true }), muted: newMuted }
+                              }));
+                            }
+                          }}
+                          className="p-2 bg-blue-600 hover:bg-blue-700 rounded-full transition-colors flex items-center justify-center"
+                          title={controls.muted ? 'Unmute' : 'Mute'}
+                        >
+                          {controls.muted ? <VolumeOffIcon className="w-5 h-5" /> : <VolumeIcon className="w-5 h-5" />}
+                        </button>
+
+                        {/* Fullscreen */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const videoEl = userVideoRefs.current[socketId];
+                            if (videoEl) {
+                              if (videoEl.requestFullscreen) {
+                                videoEl.requestFullscreen();
+                              } else if (videoEl.webkitRequestFullscreen) {
+                                videoEl.webkitRequestFullscreen();
+                              } else if (videoEl.mozRequestFullScreen) {
+                                videoEl.mozRequestFullScreen();
+                              }
+                            }
+                          }}
+                          className="p-2 bg-blue-600 hover:bg-blue-700 rounded-full transition-colors flex items-center justify-center"
+                          title="Fullscreen"
+                        >
+                          <FullscreenIcon className="w-5 h-5" />
+                        </button>
+                      </div>
+
+                      {/* Volume Control */}
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs text-gray-300 w-12">Volume:</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          value={controls.volume}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            const newVolume = parseFloat(e.target.value);
+                            const videoEl = userVideoRefs.current[socketId];
+                            if (videoEl) {
+                              videoEl.volume = newVolume;
+                              setVideoControls(prev => ({
+                                ...prev,
+                                [socketId]: { ...(prev[socketId] || { volume: 1.0, muted: false, playing: true }), volume: newVolume }
+                              }));
+                            }
+                          }}
+                          className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                        <span className="text-xs text-gray-300 w-8">{Math.round(controls.volume * 100)}%</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded text-sm">
                   {participant?.email || 'Participant'}
                 </div>
@@ -668,21 +797,23 @@ const Room = () => {
         <div className="max-w-4xl mx-auto flex justify-center space-x-4">
           <button
             onClick={toggleAudio}
-            className={`px-6 py-3 rounded-lg transition-colors ${isAudioEnabled
+            className={`px-6 py-3 rounded-lg transition-colors flex items-center space-x-2 ${isAudioEnabled
               ? 'bg-green-600 hover:bg-green-700'
               : 'bg-red-600 hover:bg-red-700'
               }`}
           >
-            {isAudioEnabled ? '🔊' : '🔇'} {isAudioEnabled ? 'Mute' : 'Unmute'}
+            {isAudioEnabled ? <MicIcon className="w-5 h-5" /> : <MicOffIcon className="w-5 h-5" />}
+            <span>{isAudioEnabled ? 'Mute' : 'Unmute'}</span>
           </button>
           <button
             onClick={toggleVideo}
-            className={`px-6 py-3 rounded-lg transition-colors ${isVideoEnabled
+            className={`px-6 py-3 rounded-lg transition-colors flex items-center space-x-2 ${isVideoEnabled
               ? 'bg-green-600 hover:bg-green-700'
               : 'bg-red-600 hover:bg-red-700'
               }`}
           >
-            {isVideoEnabled ? '📹' : '📵'} {isVideoEnabled ? 'Stop Video' : 'Start Video'}
+            {isVideoEnabled ? <VideoIcon className="w-5 h-5" /> : <VideoOffIcon className="w-5 h-5" />}
+            <span>{isVideoEnabled ? 'Stop Video' : 'Start Video'}</span>
           </button>
         </div>
       </div>
