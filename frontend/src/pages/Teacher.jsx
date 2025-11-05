@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useSocket } from '../Provider/Socket';
-import axios from 'axios';
+import apiClient from '../utils/api';
 
 const Teacher = () => {
     const navigate = useNavigate();
@@ -22,7 +22,7 @@ const Teacher = () => {
             const roomUrl = `${window.location.origin}/room/${newRoomId}`;
 
             // Save session to database
-            const response = await axios.post('https://tutor-arc.onrender.com/api/live-sessions', {
+            const response = await apiClient.post('/api/live-sessions', {
                 userurl: roomUrl
             });
 

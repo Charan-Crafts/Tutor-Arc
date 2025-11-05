@@ -190,10 +190,12 @@ io.on('connection', (socket) => {
 
 // Start Express server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server is running at port ${PORT}`);
 });
 
-// Socket server is running at port 8000
-io.listen(8000);
-console.log("Socket server is running at port 8000");
+// Attach Socket.io to the Express server (for production compatibility)
+// Socket.io will be available on the same port as Express
+io.attach(server);
+
+console.log("Socket server attached to Express server on port", PORT);
