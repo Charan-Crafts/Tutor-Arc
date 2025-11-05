@@ -16,6 +16,8 @@ const Room = () => {
   const [participants, setParticipants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notifications, setNotifications] = useState([]);
+  const [isLeaving, setIsLeaving] = useState(false);
 
   const myVideoRef = useRef(null);
   const peersRef = useRef({});
@@ -32,12 +34,35 @@ const Room = () => {
     // Handle remote stream
     peer.ontrack = (event) => {
       const [remoteStream] = event.streams;
+      console.log('Received remote stream from', socketId, 'with tracks:', remoteStream.getTracks().map(t => t.kind));
+
+      // Ensure audio and video tracks are enabled
+      remoteStream.getTracks().forEach(track => {
+        track.enabled = true;
+      });
+
       setRemoteStreams(prev => {
-        if (!prev.find(s => s.socketId === socketId)) {
+        const existing = prev.find(s => s.socketId === socketId);
+        if (existing) {
+          // Update existing stream
+          return prev.map(s =>
+            s.socketId === socketId
+              ? { ...s, stream: remoteStream }
+              : s
+          );
+        } else {
+          // Add new stream
           return [...prev, { socketId, stream: remoteStream }];
         }
-        return prev;
       });
+
+      // Update video element if it exists
+      const videoElement = userVideoRefs.current[socketId];
+      if (videoElement && remoteStream) {
+        videoElement.srcObject = remoteStream;
+        videoElement.muted = false;
+        videoElement.volume = 1.0;
+      }
     };
 
     // Handle ICE candidates
@@ -68,15 +93,23 @@ const Room = () => {
     const peer = createPeerConnection(socketId);
     peersRef.current[socketId] = peer;
 
-    // Add local stream to peer
-    if (myStream) {
-      myStream.getTracks().forEach(track => {
-        peer.addTrack(track, myStream);
+    // Get stream from ref (more reliable than state)
+    const localStream = myVideoRef.current?.srcObject;
+
+    // Add local stream to peer (both video and audio tracks)
+    if (localStream && localStream.getTracks) {
+      localStream.getTracks().forEach(track => {
+        // Ensure tracks are enabled
+        track.enabled = true;
+        peer.addTrack(track, localStream);
       });
     }
 
-    // Create and send offer
-    const offer = await peer.createOffer();
+    // Create and send offer with audio and video
+    const offer = await peer.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true
+    });
     await peer.setLocalDescription(offer);
 
     socket.emit('send-signal', {
@@ -89,24 +122,61 @@ const Room = () => {
 
   const handleJoinedRoom = async ({ existingUsers }) => {
     // Connect to existing users in the room
-    if (existingUsers && existingUsers.length > 0 && myStream) {
-      for (const user of existingUsers) {
-        await connectToPeer(user.socketId, user.email);
-      }
+    if (existingUsers && existingUsers.length > 0) {
+      // Wait for stream to be ready
+      const connectWhenReady = async (retries = 10) => {
+        // Check if stream is ready by checking the ref
+        const stream = myVideoRef.current?.srcObject;
+        if (stream && stream.getTracks && stream.getTracks().length > 0) {
+          // Stream is ready, connect to peers
+          for (const user of existingUsers) {
+            await connectToPeer(user.socketId, user.email);
+          }
+        } else if (retries > 0) {
+          // Retry after a short delay
+          setTimeout(() => connectWhenReady(retries - 1), 500);
+        }
+      };
+      connectWhenReady();
     }
   };
 
   const handleUserJoined = async ({ email, socketId }) => {
     console.log('User joined:', email);
 
-    // Connect to the new peer
-    if (myStream) {
-      await connectToPeer(socketId, email);
-    }
+    // Connect to the new peer - wait a bit for stream to be ready
+    const connectWithRetry = async (retries = 10) => {
+      // Check if stream is ready by checking the ref
+      const stream = myVideoRef.current?.srcObject;
+      if (stream && stream.getTracks && stream.getTracks().length > 0) {
+        await connectToPeer(socketId, email);
+      } else if (retries > 0) {
+        setTimeout(() => connectWithRetry(retries - 1), 500);
+      }
+    };
+
+    connectWithRetry();
   };
 
-  const handleUserLeft = ({ socketId }) => {
-    console.log('User left:', socketId);
+  const handleUserLeft = ({ socketId, email }) => {
+    console.log('User left:', socketId, email);
+
+    // Find the participant who left
+    const leavingParticipant = participants.find(p => p.socketId === socketId);
+    const leavingEmail = email || leavingParticipant?.email || 'A participant';
+
+    // Show notification
+    const notificationId = Date.now();
+    setNotifications(prev => [...prev, {
+      id: notificationId,
+      message: `${leavingEmail} left the room`,
+      type: 'info'
+    }]);
+
+    // Auto-remove notification after 5 seconds
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== notificationId));
+    }, 5000);
 
     // Remove from participants
     setParticipants(prev => prev.filter(p => p.socketId !== socketId));
@@ -133,15 +203,21 @@ const Room = () => {
     if (signal.type === 'offer') {
       await peer.setRemoteDescription(new RTCSessionDescription(signal));
 
-      // Add local stream
-      if (myStream) {
-        myStream.getTracks().forEach(track => {
-          peer.addTrack(track, myStream);
+      // Add local stream (both video and audio tracks)
+      const localStream = myVideoRef.current?.srcObject;
+      if (localStream && localStream.getTracks) {
+        localStream.getTracks().forEach(track => {
+          // Ensure tracks are enabled
+          track.enabled = true;
+          peer.addTrack(track, localStream);
         });
       }
 
-      // Create and send answer
-      const answer = await peer.createAnswer();
+      // Create and send answer with audio and video
+      const answer = await peer.createAnswer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
+      });
       await peer.setLocalDescription(answer);
 
       socket.emit('send-signal', {
@@ -153,7 +229,13 @@ const Room = () => {
     } else if (signal.type === 'answer') {
       await peer.setRemoteDescription(new RTCSessionDescription(signal));
     } else if (signal.type === 'ice-candidate') {
-      await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+      if (signal.candidate) {
+        try {
+          await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        } catch (error) {
+          console.error('Error adding ICE candidate:', error);
+        }
+      }
     }
   };
 
@@ -254,22 +336,84 @@ const Room = () => {
     alert('Link copied to clipboard!');
   };
 
-  const leaveRoom = () => {
-    // Stop all tracks
-    if (myStream) {
-      myStream.getTracks().forEach(track => track.stop());
+  const leaveRoom = async () => {
+    // Prevent double-clicks
+    if (isLeaving) {
+      return;
     }
 
-    // Close all peer connections
-    Object.values(peersRef.current).forEach(peer => {
-      peer.destroy();
-    });
+    setIsLeaving(true);
 
-    // Navigate back
-    if (isTeacher) {
-      navigate('/teacher');
-    } else {
-      navigate('/student');
+    try {
+      console.log('Leaving room, roomId:', roomId);
+
+      // Emit leave-room event to notify others
+      socket.emit('leave-room', { roomId });
+
+      // Stop all tracks
+      const stream = myVideoRef.current?.srcObject;
+      if (stream && stream.getTracks) {
+        stream.getTracks().forEach(track => {
+          track.stop();
+          console.log('Stopped track:', track.kind);
+        });
+      }
+      if (myStream) {
+        myStream.getTracks().forEach(track => {
+          track.stop();
+          console.log('Stopped myStream track:', track.kind);
+        });
+      }
+
+      // Close all peer connections
+      Object.values(peersRef.current).forEach(peer => {
+        try {
+          peer.destroy();
+        } catch (e) {
+          console.error('Error destroying peer:', e);
+        }
+      });
+
+      // Clean up socket listeners
+      socket.off('joined-room');
+      socket.off('user-joined');
+      socket.off('user-left');
+      socket.off('receive-signal');
+      socket.off('peer-connected');
+
+      // Clear refs
+      peersRef.current = {};
+      userVideoRefs.current = {};
+
+      // Get userType before any delay
+      const userType = localStorage.getItem('userType') || 'student';
+      console.log('Leaving room, userType:', userType, 'navigating to:', userType === 'teacher' ? '/teacher' : '/student');
+
+      // Small delay to ensure cleanup completes
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Navigate back - use window.location as fallback if navigate doesn't work
+      const targetPath = userType === 'teacher' ? '/teacher' : '/student';
+
+      try {
+        navigate(targetPath, { replace: true });
+        // Force navigation after a short delay if navigate doesn't work
+        setTimeout(() => {
+          if (window.location.pathname.includes('/room/')) {
+            console.log('Navigation failed, forcing redirect...');
+            window.location.href = targetPath;
+          }
+        }, 200);
+      } catch (navError) {
+        console.error('Navigation error, using window.location:', navError);
+        window.location.href = targetPath;
+      }
+    } catch (error) {
+      console.error('Error leaving room:', error);
+      // Force navigation even if there's an error
+      const userType = localStorage.getItem('userType') || 'student';
+      const targetPath = userType === 'teacher' ? '/teacher' : '/student';
+      window.location.href = targetPath;
     }
   };
 
@@ -296,9 +440,10 @@ const Room = () => {
         </div>
         <button
           onClick={leaveRoom}
-          className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+          disabled={isLeaving}
+          className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Leave Room
+          {isLeaving ? 'Leaving...' : 'Leave Room'}
         </button>
       </div>
 
@@ -307,6 +452,34 @@ const Room = () => {
           <p className="text-sm">{error}</p>
         </div>
       )}
+
+      {/* Notifications */}
+      {notifications.length > 0 && (
+        <div className="fixed top-20 right-4 z-50 space-y-2">
+          {notifications.map((notification) => (
+            <div
+              key={notification.id}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg transform transition-all duration-300 ease-in-out"
+              style={{ animation: 'slideInRight 0.3s ease-out' }}
+            >
+              <p className="text-sm">{notification.message}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <style>{`
+        @keyframes slideInRight {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+      `}</style>
 
       {/* Session Link Display (for Teacher) */}
       {isTeacher && (
@@ -362,6 +535,9 @@ const Room = () => {
                   ref={(el) => {
                     if (el && stream) {
                       el.srcObject = stream;
+                      // Ensure audio is enabled
+                      el.muted = false;
+                      el.volume = 1.0;
                     }
                     userVideoRefs.current[socketId] = el;
                   }}

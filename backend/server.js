@@ -129,6 +129,30 @@ io.on('connection', (socket) => {
         io.to(socketId).emit("peer-connected", { socketId: socket.id });
     });
 
+    // Handle leave-room event (user clicks leave button)
+    socket.on("leave-room", (data) => {
+        const { roomId } = data;
+        const userData = socket.data;
+
+        console.log('User leaving room:', socket.id, userData?.email);
+
+        if (roomId) {
+            // Notify others in the room that user left
+            socket.broadcast.to(roomId).emit("user-left", {
+                socketId: socket.id,
+                email: userData?.email
+            });
+
+            socket.leave(roomId);
+            socketToRoomMapping.delete(socket.id);
+        }
+
+        // Clean up email mapping
+        if (userData?.email) {
+            emailToSocketMapping.delete(userData.email);
+        }
+    });
+
     // Handle disconnection
     socket.on("disconnect", () => {
         console.log('User disconnected:', socket.id);
